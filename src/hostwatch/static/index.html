@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>HostWatch · Linux 主机监控</title>
+  <script>document.documentElement.dataset.theme = localStorage.getItem("hostwatch-theme") || "dark";</script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div><h1>HostWatch</h1><p>Linux Fleet Monitor</p></div>
+      </div>
+      <div class="top-actions">
+        <div class="refresh-chip" title="网页数据刷新倒计时">
+          <span class="pulse-dot"></span>
+          <span id="refreshText">正在同步…</span>
+        </div>
+        <button class="icon-button" id="refreshAll" title="立即刷新页面数据" aria-label="立即刷新">↻</button>
+        <button class="button secondary" id="openSettings">设置</button>
+        <button class="button primary" id="openAddHost"><span>＋</span> 添加主机</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="summary" aria-label="监控概览">
+        <div><span class="summary-label">主机总数</span><strong id="totalHosts">0</strong></div>
+        <div><span class="summary-label">在线</span><strong class="green" id="onlineHosts">0</strong></div>
+        <div><span class="summary-label">异常</span><strong class="red" id="errorHosts">0</strong></div>
+        <div class="summary-note" id="lastUpdated">等待首次数据</div>
+      </section>
+
+      <section class="monitor-panel">
+        <div class="table-head" aria-hidden="true">
+          <div>主机</div><div>CPU</div><div>内存</div><div>网络</div><div>根分区</div>
+        </div>
+        <div id="hostRows" class="host-rows" aria-live="polite"></div>
+        <div id="emptyState" class="empty-state" hidden>
+          <div class="empty-graphic"><span></span><span></span><span></span></div>
+          <h2>还没有监控主机</h2>
+          <p>添加第一台 Linux 主机，HostWatch 将通过 SSH 定时采集资源数据。</p>
+          <button class="button primary" id="emptyAddHost">添加主机</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="hostDialog" class="modal">
+    <form id="hostForm">
+      <div class="modal-head"><div><h2 id="hostDialogTitle">添加监控主机</h2><p id="hostDialogHint">密码和私钥会以明文写入 config.json</p></div><button type="button" class="close-button" data-close="hostDialog">×</button></div>
+      <div class="form-grid two">
+        <label><span>显示名称</span><input name="name" required maxlength="80" placeholder="例如：生产 Web 01"></label>
+        <label><span>主机地址</span><input name="address" required maxlength="255" placeholder="192.168.1.10 或域名"></label>
+        <label><span>SSH 用户名</span><input name="username" required maxlength="80" placeholder="monitor"></label>
+        <label><span>SSH 端口</span><input name="port" type="number" min="1" max="65535" value="22" required></label>
+      </div>
+      <fieldset>
+        <legend>认证方式</legend>
+        <div class="segmented">
+          <label><input type="radio" name="auth_type" value="password" checked><span>密码</span></label>
+          <label><input type="radio" name="auth_type" value="key"><span>私钥</span></label>
+        </div>
+      </fieldset>
+      <div id="passwordFields">
+        <label><span>SSH 密码</span><input name="password" type="password" autocomplete="new-password" placeholder="输入登录密码"></label>
+      </div>
+      <div id="keyFields" hidden>
+        <label><span>私钥内容</span><textarea name="private_key" rows="7" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+        <label><span>私钥口令（可选）</span><input name="passphrase" type="password" autocomplete="new-password"></label>
+      </div>
+      <p id="hostFormError" class="form-error" role="alert"></p>
+      <div class="modal-actions"><button type="button" class="button secondary" data-close="hostDialog">取消</button><button type="submit" class="button primary" id="saveHost">保存并开始监控</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="settingsDialog" class="modal small">
+    <form id="settingsForm">
+      <div class="modal-head"><div><h2>监控设置</h2><p>配置全局采集及图表展示时间范围</p></div><button type="button" class="close-button" data-close="settingsDialog">×</button></div>
+      <label><span>采集与页面刷新频率（秒）</span><input name="refresh_interval" type="number" min="5" max="3600" required></label>
+      <label><span>图表展示最近时长（分钟）</span><input name="history_minutes" type="number" min="5" max="1440" required><small>指标仅保存在内存中；超过此时间范围的数据会立即释放，服务重启后历史清空。</small></label>
+      <label><span>SSH 超时时间（秒）</span><input name="ssh_timeout" type="number" min="3" max="120" required></label>
+      <label><span>当前浏览器主题</span><select name="theme"><option value="dark">暗色</option><option value="light">亮色</option><option value="eink">墨水屏亮色</option></select><small>仅保存在当前浏览器，不写入服务端配置。</small></label>
+      <p id="settingsFormError" class="form-error" role="alert"></p>
+      <div class="modal-actions"><button type="button" class="button secondary" data-close="settingsDialog">取消</button><button type="submit" class="button primary">保存设置</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
