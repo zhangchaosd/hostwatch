@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - "agent/**"
+    tags:
+      - "v*"
   pull_request:
   workflow_dispatch:
 
@@ -58,9 +60,68 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -trimpath -ldflags="-s -w" -o "dist/${{ matrix.output }}" .
+        shell: bash
+        run: |
+          ldflags="-s -w"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            ldflags="${ldflags} -X main.version=${GITHUB_REF_NAME#v}"
+          fi
+          go build -trimpath -ldflags="${ldflags}" -o "dist/${{ matrix.output }}" .
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.output }}
           path: dist/${{ matrix.output }}
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hostwatch-*
+          path: artifacts
+          merge-multiple: true
+      - name: Create release packages and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p release stage
+
+          install -m 0755 artifacts/hostwatch-linux-amd64 stage/hostwatch
+          tar -C stage -czf "release/hostwatch_${version}_linux_amd64.tar.gz" hostwatch
+
+          install -m 0755 artifacts/hostwatch-linux-arm64 stage/hostwatch
+          tar -C stage -czf "release/hostwatch_${version}_linux_arm64.tar.gz" hostwatch
+
+          install -m 0755 artifacts/hostwatch-darwin-amd64 stage/hostwatch
+          tar -C stage -czf "release/hostwatch_${version}_darwin_amd64.tar.gz" hostwatch
+
+          install -m 0755 artifacts/hostwatch-darwin-arm64 stage/hostwatch
+          tar -C stage -czf "release/hostwatch_${version}_darwin_arm64.tar.gz" hostwatch
+
+          install -m 0755 artifacts/hostwatch-windows-amd64.exe stage/hostwatch.exe
+          (cd stage && zip -q "../release/hostwatch_${version}_windows_amd64.zip" hostwatch.exe)
+
+          (cd release && sha256sum hostwatch_* > checksums.txt)
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" release/* \
+              --verify-tag \
+              --generate-notes \
+              --latest \
+              --title "HostWatch ${GITHUB_REF_NAME}"
+          fi

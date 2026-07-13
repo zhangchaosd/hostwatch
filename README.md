@@ -51,7 +51,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o hostwatch .
 | `HOSTWATCH_PORT` | `8000` | HTTP 监听端口 |
 | `HOSTWATCH_DATA_DIR` | `./data` | `config.json` 所在目录 |
 
-## GitHub Actions 构建
+## GitHub Actions 构建与发布
 
 工作流 [`.github/workflows/build.yml`](.github/workflows/build.yml) 会执行静态检查和内置测试，并生成以下产物：
 
@@ -68,6 +68,18 @@ gh run list --workflow Build
 gh run watch <run-id>
 gh run download <run-id> --dir dist
 ```
+
+推送 `v*` 版本标签会自动创建 GitHub Release。Release 包含 Linux、macOS、Windows 压缩包以及 `checksums.txt`：
+
+```bash
+git tag -a v0.2.0 -m "HostWatch v0.2.0"
+git push origin v0.2.0
+gh run watch --exit-status
+gh release view v0.2.0
+gh release download v0.2.0 --dir dist/release
+```
+
+标签中的版本号会在编译时写入程序，因此 `v0.2.0` Release 中的二进制执行 `hostwatch -version` 会输出 `0.2.0`。
 
 ## 目标主机要求
 
