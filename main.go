@@ -28,7 +28,6 @@ import (
 )
 
 const (
-	version            = "0.2.0"
 	maxPointsPerHost   = 20000
 	maxTotalPoints     = 100000
 	defaultChartPoints = 480
@@ -36,6 +35,9 @@ const (
 	systemInfoTTL      = 6 * time.Hour
 	maxBackoff         = 5 * time.Minute
 )
+
+// version is overridden from a release tag with -ldflags "-X main.version=...".
+var version = "0.2.0"
 
 const systemInfoCommand = "printf '__SYSINFO__\\n'\n" +
 	"hostname\n" +
