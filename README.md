@@ -11,7 +11,8 @@ HostWatch 是一个轻量的多主机 Linux 资源监控网页服务。程序通
 - CPU、内存、网络收发和根分区容量折线图
 - hostname、CPU 核数、内存总量和根分区总容量
 - JSON 明文配置，不使用数据库
-- 指标仅保存在内存中，支持时间窗口和数量硬上限
+- JSON 配置自动备份、版本迁移、损坏恢复和网页导入导出
+- 指标仅保存在内存环形缓冲区中，支持时间窗口和数量硬上限
 - 增量指标接口和图表降采样
 - 离线主机指数退避，手动刷新可立即重试
 - 暗色、亮色和墨水屏亮色主题
@@ -26,12 +27,13 @@ go mod download
 go run .
 ```
 
-浏览器访问 <http://localhost:8000>。程序默认监听 `0.0.0.0:8000`，局域网设备可以使用部署机器的 IP 地址访问。
+浏览器访问 <http://localhost:8000>。程序默认监听 `:8000`，即全部可用 IPv4 和 IPv6 接口；局域网设备可以使用部署机器的 IPv4 地址或 IPv6 地址访问。
 
 运行内置检查：
 
 ```bash
 go run . -self-test
+go test -race ./...
 ```
 
 编译：
@@ -43,11 +45,11 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o hostwatch .
 
 ## 配置
 
-主机和设置保存在 `data/config.json`。密码、私钥和私钥口令均为明文。
+主机和设置保存在 `data/config.json`。密码、私钥和私钥口令均为明文。每次修改前会将上一份有效配置保存为 `data/config.json.bak`；主配置损坏时，程序启动会自动尝试用备份恢复。网页设置中可以导入或导出完整 JSON 配置。
 
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `HOSTWATCH_HOST` | `0.0.0.0` | HTTP 监听地址 |
+| `HOSTWATCH_HOST` | 空（全部接口） | HTTP 监听地址，支持 IPv4 或 IPv6 |
 | `HOSTWATCH_PORT` | `8000` | HTTP 监听端口 |
 | `HOSTWATCH_DATA_DIR` | `./data` | `config.json` 所在目录 |
 
@@ -72,14 +74,14 @@ gh run download <run-id> --dir dist
 推送 `v*` 版本标签会自动创建 GitHub Release。Release 包含 Linux、macOS、Windows 压缩包以及 `checksums.txt`：
 
 ```bash
-git tag -a v0.2.0 -m "HostWatch v0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "HostWatch v0.3.0"
+git push origin v0.3.0
 gh run watch --exit-status
-gh release view v0.2.0
-gh release download v0.2.0 --dir dist/release
+gh release view v0.3.0
+gh release download v0.3.0 --dir dist/release
 ```
 
-标签中的版本号会在编译时写入程序，因此 `v0.2.0` Release 中的二进制执行 `hostwatch -version` 会输出 `0.2.0`。
+标签中的版本号会在编译时写入程序，因此 `v0.3.0` Release 中的二进制执行 `hostwatch -version` 会输出 `0.3.0`。
 
 ## 目标主机要求
 
