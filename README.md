@@ -1,79 +1,74 @@
 # HostWatch
 
-一个轻量的多主机 Linux 资源监控网页服务。服务通过 SSH 定时读取目标主机的 `/proc` 和 `df`，在同一行展示 CPU、内存、网络吞吐和根分区容量使用率的历史折线图。
+HostWatch 是一个轻量的多主机 Linux 资源监控网页服务。程序通过 SSH 定时采集目标主机的 CPU、内存、网络和根分区容量使用情况。
+
+应用实现、网页 HTML、CSS 和 JavaScript 全部包含在一个 [`main.go`](main.go) 源文件中。编译后只需分发一个二进制文件。
 
 ## 功能
 
-- 密码或 OpenSSH 私钥登录（支持带口令私钥）
-- 添加、编辑、删除主机，拖拽或上下按钮调整主机顺序
-- 左侧展示 hostname；CPU 核数、总内存和根分区总容量分别显示在对应图表标题中
-- CPU、内存、网络接收/发送、根分区容量使用率历史图表
-- 单个 JSON 文件保存主机、明文 SSH 凭据和设置
-- 监控指标只保存在内存中
-- 全局采集频率、图表时间范围和 SSH 超时设置
-- 暗色、亮色和墨水屏亮色主题（主题仅保存在当前浏览器）
-- 单台主机立即采集、在线状态、延迟和错误信息展示
-- 指标按时间戳增量传输，并自动将图表限制在 480 个绘图点
-- 离线主机指数退避（最长 5 分钟），手动刷新可立即重试
-- hostname、CPU 核数等静态信息缓存 6 小时，避免重复采集
+- SSH 密码或 OpenSSH 私钥登录，支持带口令私钥
+- 添加、编辑、删除、拖拽排序主机
+- CPU、内存、网络收发和根分区容量折线图
+- hostname、CPU 核数、内存总量和根分区总容量
+- JSON 明文配置，不使用数据库
+- 指标仅保存在内存中，支持时间窗口和数量硬上限
+- 增量指标接口和图表降采样
+- 离线主机指数退避，手动刷新可立即重试
+- 暗色、亮色和墨水屏亮色主题
+- 局域网访问
 
-## 快速开始
+## 本地运行
 
-需要 Python 3.11+ 和 [uv](https://docs.astral.sh/uv/)。uv 会自动选择或安装兼容的 Python。
+需要 Go 1.24 或更高版本。
 
 ```bash
-uv sync
-uv run python run.py
+go mod download
+go run .
 ```
 
-浏览器打开 <http://localhost:8000>。默认监听 `0.0.0.0:8000`。
+浏览器访问 <http://localhost:8000>。程序默认监听 `0.0.0.0:8000`，局域网设备可以使用部署机器的 IP 地址访问。
 
-同一局域网内的其他设备可通过部署机器的局域网地址访问，例如：
-
-```text
-http://192.168.0.188:8000
-```
-
-启动时也可以显式指定监听地址和端口：
+运行内置检查：
 
 ```bash
-HOSTWATCH_HOST=0.0.0.0 HOSTWATCH_PORT=8000 uv run python run.py
+go run . -self-test
 ```
 
-如果其他设备无法连接，请确认两台设备位于同一局域网，并在部署机器的系统防火墙中允许 Python 接收入站连接、放行 TCP 8000 端口。路由器开启了“客户端隔离”时，同一 Wi-Fi 下的设备也可能无法互相访问。
-
-开发模式可使用：
+编译：
 
 ```bash
-uv sync --extra dev
-uv run uvicorn --app-dir src hostwatch.main:app --reload
-uv run pytest
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o hostwatch .
+./hostwatch
 ```
 
 ## 配置
 
-可通过环境变量修改服务参数：
+主机和设置保存在 `data/config.json`。密码、私钥和私钥口令均为明文。
 
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `HOSTWATCH_HOST` | `0.0.0.0` | HTTP 监听地址 |
 | `HOSTWATCH_PORT` | `8000` | HTTP 监听端口 |
 | `HOSTWATCH_DATA_DIR` | `./data` | `config.json` 所在目录 |
-| `LOG_LEVEL` | `INFO` | Python 日志级别 |
 
-网页设置中的默认采集频率是 15 秒，最小值为 5 秒。图表默认展示最近 60 分钟，可设置为 5 分钟到 24 小时。超过展示时间的数据会从内存中立即淘汰，服务重启后监控历史清空。CPU 和网络速率需要两次采样才能计算，因此首次采集显示为 0。
+## GitHub Actions 构建
+
+工作流 [`.github/workflows/build.yml`](.github/workflows/build.yml) 会执行静态检查和内置测试，并生成以下产物：
+
+- `hostwatch-linux-amd64`
+- `hostwatch-linux-arm64`
+- `hostwatch-darwin-amd64`
+- `hostwatch-darwin-arm64`
+- `hostwatch-windows-amd64.exe`
+
+可以通过 GitHub CLI 查看和下载构建产物：
+
+```bash
+gh run list --workflow Build
+gh run watch <run-id>
+gh run download <run-id> --dir dist
+```
 
 ## 目标主机要求
 
-目标必须是可通过 SSH 登录的 Linux 主机，并提供以下只读命令/文件：
-
-- `/proc/stat`
-- `/proc/meminfo`
-- `/proc/net/dev`
-- `df`, `awk`, `head`, `tail`, `cat`, `printf`
-
-不需要 root 权限。建议创建权限受限的专用监控用户，并优先使用密钥认证。
-
-## 数据
-
-主机连接配置和全局设置位于 `data/config.json`。密码、私钥及私钥口令都以明文保存，可直接编辑该文件。CPU、内存、网络和磁盘指标不会写入任何文件，只存在于进程内存中；超过配置时间窗口的数据会释放。内存存储使用紧凑数值元组，并设有每台主机 20,000 个点、整个服务 100,000 个点的双重硬上限；达到上限时优先释放最老的数据，即使频繁触发手动采集也不会无限增长。
+SSH 用户无需 root 权限，但目标主机需要提供 `/proc/stat`、`/proc/meminfo`、`/proc/net/dev` 以及 `df`、`awk`、`head`、`tail`、`cat`、`hostname` 和 `getconf` 等基础命令。
