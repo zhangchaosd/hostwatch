@@ -12,12 +12,12 @@ import (
 	"io"
 	"log"
 	"math"
-	"math/rand"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,17 +30,20 @@ import (
 
 const (
 	currentConfigVersion = 2
+	maxJSONBodyBytes     = 1 << 20
 	maxConfigBytes       = 8 << 20
+	maxHosts             = 512
 	maxPointsPerHost     = 20000
 	maxTotalPoints       = 100000
 	defaultChartPoints   = 480
 	maxChartPoints       = 1000
 	systemInfoTTL        = 6 * time.Hour
+	sshIdleTTL           = 5 * time.Minute
 	maxBackoff           = 5 * time.Minute
 )
 
 // version is overridden from a release tag with -ldflags "-X main.version=...".
-var version = "0.3.0"
+var version = "0.4.0"
 
 const systemInfoCommand = "printf '__SYSINFO__\\n'\n" +
 	"hostname\n" +
@@ -58,13 +61,13 @@ const metricCommand = "printf '__STAT__\\n'\n" +
 	"df -P / | tail -n 1\n"
 
 const htmlAsset = "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"
-const cssAsset = "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"
-const jsAsset = "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"
+const cssAsset = "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"
+const jsAsset = "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"
 
 var (
-	indexHTML = mustDecodeAsset(htmlAsset)
-	styleCSS  = mustDecodeAsset(cssAsset)
-	appJS     = mustDecodeAsset(jsAsset)
+	indexHTML, indexHTMLGzip = mustDecodeAsset(htmlAsset)
+	styleCSS, styleCSSGzip   = mustDecodeAsset(cssAsset)
+	appJS, appJSGzip         = mustDecodeAsset(jsAsset)
 )
 
 type Settings struct {
@@ -194,6 +197,9 @@ func decodeConfig(raw []byte) (configFile, bool, error) {
 		config.Hosts = []Host{}
 		migrated = true
 	}
+	if len(config.Hosts) > maxHosts {
+		return configFile{}, false, fmt.Errorf("主机数量超过 %d 台限制", maxHosts)
+	}
 	sort.SliceStable(config.Hosts, func(i, j int) bool {
 		if config.Hosts[i].Position == config.Hosts[j].Position {
 			return config.Hosts[i].ID < config.Hosts[j].ID
@@ -281,14 +287,41 @@ func (s *Store) load() error {
 }
 
 func writeAtomic(path string, raw []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0755); err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0644); err != nil {
+	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	cleanup := func(writeErr error) error {
+		_ = file.Close()
+		_ = os.Remove(tmp)
+		return writeErr
+	}
+	if _, err := file.Write(raw); err != nil {
+		return cleanup(err)
+	}
+	if err := file.Sync(); err != nil {
+		return cleanup(err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if directoryHandle, err := os.Open(directory); err == nil {
+		// Directory fsync makes the rename durable on Linux. Some supported
+		// desktop filesystems do not implement it, so failure is non-fatal.
+		_ = directoryHandle.Sync()
+		_ = directoryHandle.Close()
+	}
+	return nil
 }
 
 func (s *Store) marshalLocked() ([]byte, error) {
@@ -412,6 +445,9 @@ func (s *Store) createHost(h Host) (PublicHost, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.data.Hosts) >= maxHosts {
+		return PublicHost{}, fmt.Errorf("主机数量已达到 %d 台限制", maxHosts)
+	}
 	previous := cloneConfig(s.data)
 	h.Name = strings.TrimSpace(h.Name)
 	h.Address = strings.TrimSpace(h.Address)
@@ -554,6 +590,7 @@ func (s *Store) updateSettings(settings Settings) error {
 }
 
 type Metric struct {
+	Sequence      uint64  `json:"sequence"`
 	Timestamp     float64 `json:"timestamp"`
 	CPUPercent    float64 `json:"cpu_percent"`
 	MemoryPercent float64 `json:"memory_percent"`
@@ -635,10 +672,41 @@ func (r *metricRing) prune(cutoff float64) int {
 	return removed
 }
 
+func averageMetric(first, second Metric) Metric {
+	return Metric{
+		Sequence: second.Sequence, Timestamp: (first.Timestamp + second.Timestamp) / 2,
+		CPUPercent:    (first.CPUPercent + second.CPUPercent) / 2,
+		MemoryPercent: (first.MemoryPercent + second.MemoryPercent) / 2,
+		NetworkRXMbps: (first.NetworkRXMbps + second.NetworkRXMbps) / 2,
+		NetworkTXMbps: (first.NetworkTXMbps + second.NetworkTXMbps) / 2,
+		DiskPercent:   (first.DiskPercent + second.DiskPercent) / 2,
+	}
+}
+
+func (r *metricRing) compact() int {
+	if r.size < 2 {
+		return 0
+	}
+	before := r.size
+	compacted := make([]Metric, 0, (r.size+1)/2)
+	for index := 0; index < r.size; index += 2 {
+		if index+1 < r.size {
+			compacted = append(compacted, averageMetric(r.at(index), r.at(index+1)))
+		} else {
+			compacted = append(compacted, r.at(index))
+		}
+	}
+	copy(r.points, compacted)
+	r.start = 0
+	r.size = len(compacted)
+	return before - r.size
+}
+
 type MetricStore struct {
 	mu           sync.Mutex
 	data         map[int]*metricRing
 	total        int
+	nextSequence uint64
 	perHostLimit int
 	totalLimit   int
 }
@@ -659,9 +727,11 @@ func newMetricStoreWithLimits(perHostLimit, totalLimit int) *MetricStore {
 	}
 }
 
-func (m *MetricStore) add(hostID int, metric Metric, historyMinutes int) {
+func (m *MetricStore) add(hostID int, metric Metric, historyMinutes int) Metric {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.nextSequence++
+	metric.Sequence = m.nextSequence
 	m.pruneHostLocked(hostID, float64(time.Now().UnixNano())/1e9-float64(historyMinutes*60))
 	ring := m.data[hostID]
 	if ring == nil {
@@ -672,22 +742,33 @@ func (m *MetricStore) add(hostID int, metric Metric, historyMinutes int) {
 		m.total++
 	}
 	for m.total > m.totalLimit {
+		largestID, largestSize := 0, 0
+		for id, candidate := range m.data {
+			if candidate.size > largestSize {
+				largestID, largestSize = id, candidate.size
+			}
+		}
+		if largestSize > 1 {
+			m.total -= m.data[largestID].compact()
+			continue
+		}
 		oldestID, oldestTime, found := 0, math.MaxFloat64, false
 		for id, candidate := range m.data {
 			if oldest, ok := candidate.oldest(); ok && oldest.Timestamp < oldestTime {
 				oldestID, oldestTime, found = id, oldest.Timestamp, true
 			}
 		}
-		if !found {
+		if !found || !m.data[oldestID].popOldest() {
 			break
 		}
-		if m.data[oldestID].popOldest() {
+		if found {
 			m.total--
 		}
 		if m.data[oldestID].size == 0 {
 			delete(m.data, oldestID)
 		}
 	}
+	return metric
 }
 
 func (m *MetricStore) pruneHostLocked(hostID int, cutoff float64) {
@@ -701,21 +782,23 @@ func (m *MetricStore) pruneHostLocked(hostID int, cutoff float64) {
 	}
 }
 
-func (m *MetricStore) get(hostID int, historyMinutes int, since *float64, limit int) []Metric {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	cutoff := float64(time.Now().UnixNano())/1e9 - float64(historyMinutes*60)
-	m.pruneHostLocked(hostID, cutoff)
+func (m *MetricStore) selectLocked(hostID int, sinceTimestamp *float64, sinceSequence *uint64, limit int) []Metric {
 	ring := m.data[hostID]
 	if ring == nil {
 		return []Metric{}
 	}
-	selected := make([]Metric, 0, ring.size)
-	for i := 0; i < ring.size; i++ {
-		point := ring.at(i)
-		if since == nil || point.Timestamp > *since {
-			selected = append(selected, point)
+	start := 0
+	for start < ring.size {
+		point := ring.at(start)
+		afterTimestamp := sinceTimestamp == nil || point.Timestamp > *sinceTimestamp
+		afterSequence := sinceSequence == nil || point.Sequence > *sinceSequence
+		if afterTimestamp && afterSequence {
+			break
 		}
+		start++
+	}
+	if start == ring.size {
+		return []Metric{}
 	}
 	if limit < 2 {
 		limit = 2
@@ -723,20 +806,52 @@ func (m *MetricStore) get(hostID int, historyMinutes int, since *float64, limit 
 	if limit > maxChartPoints {
 		limit = maxChartPoints
 	}
-	if len(selected) <= limit {
+	count := ring.size - start
+	if count <= limit {
+		selected := make([]Metric, count)
+		for index := 0; index < count; index++ {
+			selected[index] = ring.at(start + index)
+		}
 		return selected
 	}
 	out := make([]Metric, 0, limit)
-	last := len(selected) - 1
+	last := count - 1
 	lastIndex := -1
 	for i := 0; i < limit; i++ {
 		index := int(math.Round(float64(i*last) / float64(limit-1)))
 		if index != lastIndex {
-			out = append(out, selected[index])
+			out = append(out, ring.at(start+index))
 			lastIndex = index
 		}
 	}
 	return out
+}
+
+func (m *MetricStore) getSnapshot(hostID int, historyMinutes int, sinceTimestamp *float64, sinceSequence *uint64, limit int) ([]Metric, uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := float64(time.Now().UnixNano())/1e9 - float64(historyMinutes*60)
+	m.pruneHostLocked(hostID, cutoff)
+	return m.selectLocked(hostID, sinceTimestamp, sinceSequence, limit), m.nextSequence
+}
+
+func (m *MetricStore) get(hostID int, historyMinutes int, sinceTimestamp *float64, limit int) []Metric {
+	metrics, _ := m.getSnapshot(hostID, historyMinutes, sinceTimestamp, nil, limit)
+	return metrics
+}
+
+func (m *MetricStore) getAll(hostIDs []int, historyMinutes int, sinceTimestamp *float64, sinceSequence *uint64, limit int) (map[string][]Metric, uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := float64(time.Now().UnixNano())/1e9 - float64(historyMinutes*60)
+	metrics := make(map[string][]Metric, len(hostIDs))
+	for _, hostID := range hostIDs {
+		m.pruneHostLocked(hostID, cutoff)
+		metrics[strconv.Itoa(hostID)] = m.selectLocked(hostID, sinceTimestamp, sinceSequence, limit)
+	}
+	// Sequence numbers are assigned under this same lock. The returned boundary
+	// therefore describes this exact snapshot and cannot skip a concurrent add.
+	return metrics, m.nextSequence
 }
 
 func (m *MetricStore) remove(hostID int) {
@@ -762,6 +877,13 @@ func (m *MetricStore) reset() {
 	defer m.mu.Unlock()
 	m.data = make(map[int]*metricRing)
 	m.total = 0
+	m.nextSequence = 0
+}
+
+func (m *MetricStore) stats() (points int, hosts int, sequence uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.total, len(m.data), m.nextSequence
 }
 
 type SystemInfo struct {
@@ -777,41 +899,198 @@ type counters struct {
 }
 
 type Collector struct {
-	mu       sync.Mutex
-	previous map[int]counters
+	mu             sync.Mutex
+	previous       map[int]counters
+	connections    map[int]*sshConnection
+	maxConnections int
 }
 
 func newCollector() *Collector {
-	return &Collector{previous: make(map[int]counters)}
+	return &Collector{
+		previous: make(map[int]counters), connections: make(map[int]*sshConnection),
+		maxConnections: sshConnectionLimit(),
+	}
 }
 
-func (c *Collector) collect(host Host, timeout time.Duration, includeInfo bool) (Metric, *SystemInfo, error) {
+func sshConnectionLimit() int {
+	value := 128
+	if raw := strings.TrimSpace(os.Getenv("HOSTWATCH_MAX_IDLE_SSH")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 || parsed > maxHosts {
+			log.Printf("HOSTWATCH_MAX_IDLE_SSH=%q 无效，使用默认值 %d", raw, value)
+		} else {
+			value = parsed
+		}
+	}
+	return value
+}
+
+type sshConnection struct {
+	client   *ssh.Client
+	conn     net.Conn
+	lastUsed time.Time
+}
+
+func (connection *sshConnection) close() {
+	_ = connection.client.Close()
+	_ = connection.conn.Close()
+}
+
+func collectionDeadline(ctx context.Context, timeout time.Duration) time.Time {
+	deadline := time.Now().Add(timeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	return deadline
+}
+
+func (c *Collector) dial(ctx context.Context, host Host, timeout time.Duration) (*sshConnection, error) {
 	auth, err := sshAuth(host)
 	if err != nil {
-		return Metric{}, nil, err
+		return nil, err
 	}
 	config := &ssh.ClientConfig{
 		User: host.Username, Auth: []ssh.AuthMethod{auth},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: timeout,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
-	address := fmt.Sprintf("%s:%d", host.Address, host.Port)
-	client, err := ssh.Dial("tcp", address, config)
+	address := net.JoinHostPort(host.Address, strconv.Itoa(host.Port))
+	dialer := net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
+	rawConn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
-		return Metric{}, nil, fmt.Errorf("SSH 连接失败: %w", err)
+		return nil, fmt.Errorf("SSH 连接失败: %w", err)
 	}
-	defer client.Close()
-	session, err := client.NewSession()
+	if err := rawConn.SetDeadline(collectionDeadline(ctx, timeout)); err != nil {
+		_ = rawConn.Close()
+		return nil, fmt.Errorf("设置 SSH deadline 失败: %w", err)
+	}
+	stopCancellation := context.AfterFunc(ctx, func() { _ = rawConn.Close() })
+	defer stopCancellation()
+	clientConn, channels, requests, err := ssh.NewClientConn(rawConn, address, config)
 	if err != nil {
-		return Metric{}, nil, fmt.Errorf("创建 SSH 会话失败: %w", err)
+		_ = rawConn.Close()
+		return nil, fmt.Errorf("SSH 握手失败: %w", err)
+	}
+	client := ssh.NewClient(clientConn, channels, requests)
+	connection := &sshConnection{client: client, conn: rawConn, lastUsed: time.Now()}
+	if err := rawConn.SetDeadline(time.Time{}); err != nil {
+		connection.close()
+		return nil, fmt.Errorf("清除 SSH deadline 失败: %w", err)
+	}
+	return connection, nil
+}
+
+func (c *Collector) connection(ctx context.Context, host Host, timeout time.Duration) (*sshConnection, error) {
+	c.mu.Lock()
+	connection := c.connections[host.ID]
+	if connection != nil && time.Since(connection.lastUsed) <= sshIdleTTL {
+		c.mu.Unlock()
+		return connection, nil
+	}
+	if connection != nil {
+		delete(c.connections, host.ID)
+	}
+	c.mu.Unlock()
+	if connection != nil {
+		connection.close()
+	}
+
+	connection, err := c.dial(ctx, host, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		connection.close()
+		return nil, err
+	}
+	c.mu.Lock()
+	previous := c.connections[host.ID]
+	if previous != nil || len(c.connections) < c.maxConnections {
+		c.connections[host.ID] = connection
+	}
+	c.mu.Unlock()
+	if previous != nil {
+		previous.close()
+	}
+	return connection, nil
+}
+
+func (c *Collector) discardConnection(hostID int, connection *sshConnection) {
+	c.mu.Lock()
+	if c.connections[hostID] == connection {
+		delete(c.connections, hostID)
+	}
+	c.mu.Unlock()
+	connection.close()
+}
+
+func (c *Collector) runCommand(ctx context.Context, host Host, timeout time.Duration, command string) ([]byte, error) {
+	connection, err := c.connection(ctx, host, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := connection.conn.SetDeadline(collectionDeadline(ctx, timeout)); err != nil {
+		c.discardConnection(host.ID, connection)
+		return nil, err
+	}
+	stopCancellation := context.AfterFunc(ctx, func() {
+		// SetDeadline interrupts an active SSH read/write without leaving a
+		// permanently blocked goroutine behind.
+		_ = connection.conn.SetDeadline(time.Now())
+	})
+	defer stopCancellation()
+
+	session, err := connection.client.NewSession()
+	if err != nil {
+		c.discardConnection(host.ID, connection)
+		// Idle SSH connections can be closed by the remote side. Reconnect once.
+		connection, err = c.connection(ctx, host, timeout)
+		if err != nil {
+			return nil, fmt.Errorf("重连 SSH 失败: %w", err)
+		}
+		if err = connection.conn.SetDeadline(collectionDeadline(ctx, timeout)); err != nil {
+			c.discardConnection(host.ID, connection)
+			return nil, err
+		}
+		session, err = connection.client.NewSession()
+	}
+	if err != nil {
+		c.discardConnection(host.ID, connection)
+		return nil, fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
 	defer session.Close()
+	output, err := session.CombinedOutput(command)
+	if err != nil {
+		c.discardConnection(host.ID, connection)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("SSH 采集超时或已取消: %w", ctxErr)
+		}
+		return nil, fmt.Errorf("远端采集失败: %w", err)
+	}
+	if err := connection.conn.SetDeadline(time.Time{}); err != nil {
+		c.discardConnection(host.ID, connection)
+		return nil, err
+	}
+	c.mu.Lock()
+	pooled := false
+	if c.connections[host.ID] == connection {
+		connection.lastUsed = time.Now()
+		pooled = true
+	}
+	c.mu.Unlock()
+	if !pooled {
+		connection.close()
+	}
+	return output, nil
+}
+
+func (c *Collector) collect(ctx context.Context, host Host, timeout time.Duration, includeInfo bool) (Metric, *SystemInfo, error) {
 	command := metricCommand
 	if includeInfo {
 		command = systemInfoCommand + metricCommand
 	}
-	output, err := session.CombinedOutput(command)
+	output, err := c.runCommand(ctx, host, timeout, command)
 	if err != nil {
-		return Metric{}, nil, fmt.Errorf("远端采集失败: %w", err)
+		return Metric{}, nil, err
 	}
 	metric, err := c.parseMetric(host.ID, string(output))
 	if err != nil {
@@ -1004,14 +1283,46 @@ func parseSystemInfo(output string) (SystemInfo, error) {
 
 func (c *Collector) forget(hostID int) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	connection := c.connections[hostID]
 	delete(c.previous, hostID)
+	delete(c.connections, hostID)
+	c.mu.Unlock()
+	if connection != nil {
+		connection.close()
+	}
 }
 
 func (c *Collector) reset() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	connections := c.connections
 	c.previous = make(map[int]counters)
+	c.connections = make(map[int]*sshConnection)
+	c.mu.Unlock()
+	for _, connection := range connections {
+		connection.close()
+	}
+}
+
+func (c *Collector) pruneIdle() {
+	c.mu.Lock()
+	now := time.Now()
+	idle := make([]*sshConnection, 0)
+	for id, connection := range c.connections {
+		if now.Sub(connection.lastUsed) > sshIdleTTL {
+			delete(c.connections, id)
+			idle = append(idle, connection)
+		}
+	}
+	c.mu.Unlock()
+	for _, connection := range idle {
+		connection.close()
+	}
+}
+
+func (c *Collector) connectionCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.connections)
 }
 
 func clamp(value, low, high float64) float64 {
@@ -1046,27 +1357,68 @@ type Poller struct {
 	systemInfo map[int]SystemInfo
 	infoTimes  map[int]time.Time
 	failures   map[int]int
-	nextRetry  map[int]time.Time
+	nextDue    map[int]time.Time
 	hostLocks  map[int]*sync.Mutex
+	revisions  map[int]uint64
+	running    map[int]bool
+	active     map[int]context.CancelFunc
 	semaphore  chan struct{}
+	queue      chan int
 	wake       chan struct{}
-	stop       chan struct{}
-	stopOnce   sync.Once
+	ctx        context.Context
+	cancel     context.CancelFunc
+	workers    int
+	wg         sync.WaitGroup
+	closeOnce  sync.Once
 	generation uint64
+	startedAt  time.Time
 }
 
 func newPoller(store *Store) *Poller {
+	ctx, cancel := context.WithCancel(context.Background())
+	workers := collectorConcurrency()
 	return &Poller{
 		store: store, metrics: newMetricStore(), collector: newCollector(),
 		statuses: make(map[int]HostStatus), systemInfo: make(map[int]SystemInfo),
 		infoTimes: make(map[int]time.Time), failures: make(map[int]int),
-		nextRetry: make(map[int]time.Time), hostLocks: make(map[int]*sync.Mutex),
-		semaphore: make(chan struct{}, 10), wake: make(chan struct{}, 1), stop: make(chan struct{}),
+		nextDue: make(map[int]time.Time), hostLocks: make(map[int]*sync.Mutex),
+		revisions: make(map[int]uint64), running: make(map[int]bool),
+		active:    make(map[int]context.CancelFunc),
+		semaphore: make(chan struct{}, workers), queue: make(chan int, workers*2),
+		wake: make(chan struct{}, 1), ctx: ctx, cancel: cancel, workers: workers,
+		startedAt: time.Now(),
 	}
 }
 
-func (p *Poller) start() { go p.loop() }
-func (p *Poller) close() { p.stopOnce.Do(func() { close(p.stop) }) }
+func collectorConcurrency() int {
+	value := 8
+	if raw := strings.TrimSpace(os.Getenv("HOSTWATCH_MAX_CONCURRENT")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 64 {
+			log.Printf("HOSTWATCH_MAX_CONCURRENT=%q 无效，使用默认值 %d", raw, value)
+		} else {
+			value = parsed
+		}
+	}
+	return value
+}
+
+func (p *Poller) start() {
+	p.wg.Add(1 + p.workers)
+	go p.loop()
+	for i := 0; i < p.workers; i++ {
+		go p.worker()
+	}
+}
+
+func (p *Poller) close() {
+	p.closeOnce.Do(func() {
+		p.cancel()
+		p.collector.reset()
+	})
+	p.wg.Wait()
+}
+
 func (p *Poller) wakeNow() {
 	select {
 	case p.wake <- struct{}{}:
@@ -1075,17 +1427,12 @@ func (p *Poller) wakeNow() {
 }
 
 func (p *Poller) loop() {
+	defer p.wg.Done()
 	for {
+		wait := p.scheduleDue()
+		timer := time.NewTimer(wait)
 		select {
-		case <-p.stop:
-			return
-		default:
-		}
-		p.collectAll()
-		interval := time.Duration(p.store.settings().RefreshInterval) * time.Second
-		timer := time.NewTimer(interval)
-		select {
-		case <-p.stop:
+		case <-p.ctx.Done():
 			timer.Stop()
 			return
 		case <-p.wake:
@@ -1095,30 +1442,77 @@ func (p *Poller) loop() {
 	}
 }
 
-func (p *Poller) collectAll() {
+func (p *Poller) scheduleDue() time.Duration {
+	p.collector.pruneIdle()
 	hosts, _ := p.store.listHosts(true)
-	var wg sync.WaitGroup
-	maxJitter := time.Duration(p.store.settings().RefreshInterval) * time.Second / 10
-	if maxJitter > 2*time.Second {
-		maxJitter = 2 * time.Second
-	}
-	if maxJitter < 200*time.Millisecond {
-		maxJitter = 200 * time.Millisecond
-	}
+	validHosts := make(map[int]struct{}, len(hosts))
 	for _, host := range hosts {
-		wg.Add(1)
-		go func(h Host) {
-			defer wg.Done()
-			jitter := time.Duration(rand.Int63n(int64(maxJitter)))
-			select {
-			case <-p.stop:
-				return
-			case <-time.After(jitter):
-			}
-			p.collectHost(h.ID, false)
-		}(host)
+		validHosts[host.ID] = struct{}{}
 	}
-	wg.Wait()
+	p.mu.Lock()
+	for id := range p.hostLocks {
+		if _, exists := validHosts[id]; !exists && !p.running[id] && p.active[id] == nil {
+			delete(p.hostLocks, id)
+			delete(p.revisions, id)
+			delete(p.running, id)
+			delete(p.nextDue, id)
+		}
+	}
+	p.mu.Unlock()
+	now := time.Now()
+	interval := time.Duration(p.store.settings().RefreshInterval) * time.Second
+	wait := time.Minute
+	for _, host := range hosts {
+		p.mu.Lock()
+		due := p.nextDue[host.ID]
+		if p.running[host.ID] {
+			p.mu.Unlock()
+			continue
+		}
+		if !due.IsZero() && now.Before(due) {
+			p.mu.Unlock()
+			if remaining := time.Until(due); remaining < wait {
+				wait = remaining
+			}
+			continue
+		}
+		p.running[host.ID] = true
+		// A provisional due time prevents duplicate queueing if a worker wakes
+		// the dispatcher before the collection result is committed.
+		p.nextDue[host.ID] = now.Add(interval)
+		p.mu.Unlock()
+		select {
+		case p.queue <- host.ID:
+		default:
+			p.mu.Lock()
+			p.running[host.ID] = false
+			p.nextDue[host.ID] = time.Time{}
+			p.mu.Unlock()
+			if wait > 100*time.Millisecond {
+				wait = 100 * time.Millisecond
+			}
+		}
+	}
+	if wait < 25*time.Millisecond {
+		wait = 25 * time.Millisecond
+	}
+	return wait
+}
+
+func (p *Poller) worker() {
+	defer p.wg.Done()
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case id := <-p.queue:
+			p.collectHost(id, false)
+			p.mu.Lock()
+			p.running[id] = false
+			p.mu.Unlock()
+			p.wakeNow()
+		}
+	}
 }
 
 func (p *Poller) hostLock(id int) *sync.Mutex {
@@ -1131,20 +1525,12 @@ func (p *Poller) hostLock(id int) *sync.Mutex {
 }
 
 func (p *Poller) collectHost(id int, force bool) HostStatus {
-	p.mu.Lock()
-	if !force && time.Now().Before(p.nextRetry[id]) {
-		status := p.statuses[id]
-		p.mu.Unlock()
-		return status
-	}
-	p.mu.Unlock()
-
 	lock := p.hostLock(id)
 	lock.Lock()
 	defer lock.Unlock()
 
 	p.mu.Lock()
-	if !force && time.Now().Before(p.nextRetry[id]) {
+	if !force && time.Now().Before(p.nextDue[id]) && !p.running[id] {
 		status := p.statuses[id]
 		p.mu.Unlock()
 		return status
@@ -1159,6 +1545,7 @@ func (p *Poller) collectHost(id int, force bool) HostStatus {
 	now := time.Now()
 	p.mu.Lock()
 	generation := p.generation
+	revision := p.revisions[id]
 	info, hasInfo := p.systemInfo[id]
 	infoTime := p.infoTimes[id]
 	current := p.statuses[id]
@@ -1167,19 +1554,43 @@ func (p *Poller) collectHost(id int, force bool) HostStatus {
 		current.SystemInfo = &info
 	}
 	p.statuses[id] = current
+	collectionContext, cancel := context.WithTimeout(
+		p.ctx, time.Duration(settings.SSHTimeout)*time.Second,
+	)
+	p.active[id] = cancel
 	p.mu.Unlock()
 
-	p.semaphore <- struct{}{}
+	select {
+	case p.semaphore <- struct{}{}:
+	case <-collectionContext.Done():
+		cancel()
+		p.mu.Lock()
+		delete(p.active, id)
+		status := p.statuses[id]
+		p.mu.Unlock()
+		return status
+	}
 	started := time.Now()
 	metric, collectedInfo, err := p.collector.collect(
-		host, time.Duration(settings.SSHTimeout)*time.Second,
+		collectionContext, host, time.Duration(settings.SSHTimeout)*time.Second,
 		!hasInfo || now.Sub(infoTime) >= systemInfoTTL,
 	)
 	<-p.semaphore
+	cancel()
+	latestSettings := p.store.settings()
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if generation != p.generation {
+	delete(p.active, id)
+	if generation != p.generation || revision != p.revisions[id] {
+		p.mu.Unlock()
+		p.collector.forget(id)
+		if _, exists := p.store.getHost(id); !exists {
+			return HostStatus{State: "missing", Error: stringPointer("主机不存在")}
+		}
+		return HostStatus{State: "pending"}
+	}
+	if p.ctx.Err() != nil {
+		p.mu.Unlock()
 		return HostStatus{State: "pending"}
 	}
 	if err == nil {
@@ -1189,28 +1600,30 @@ func (p *Poller) collectHost(id int, force bool) HostStatus {
 			info = *collectedInfo
 			hasInfo = true
 		}
-		p.metrics.add(id, metric, settings.HistoryMinutes)
+		metric = p.metrics.add(id, metric, latestSettings.HistoryMinutes)
 		delete(p.failures, id)
-		delete(p.nextRetry, id)
+		p.nextDue[id] = time.Now().Add(time.Duration(latestSettings.RefreshInterval) * time.Second)
 		status := HostStatus{
 			State: "online", LastSuccess: metric.Timestamp,
-			LatencyMS: time.Since(started).Milliseconds(),
+			LastAttempt: metric.Timestamp, LatencyMS: time.Since(started).Milliseconds(),
 		}
 		if hasInfo {
 			status.SystemInfo = &info
 		}
 		p.statuses[id] = status
+		p.mu.Unlock()
 		return status
 	}
 	failures := p.failures[id] + 1
 	p.failures[id] = failures
-	backoff := retryBackoff(settings.RefreshInterval, failures)
+	backoff := retryBackoff(latestSettings.RefreshInterval, failures)
 	retryAt := time.Now().Add(backoff)
-	p.nextRetry[id] = retryAt
+	p.nextDue[id] = retryAt
 	message := err.Error()
 	status := HostStatus{
 		State: "error", Error: &message, LastAttempt: float64(time.Now().UnixNano()) / 1e9,
-		RetryAt: float64(retryAt.UnixNano()) / 1e9, FailureCount: failures,
+		LastSuccess: current.LastSuccess, RetryAt: float64(retryAt.UnixNano()) / 1e9,
+		FailureCount: failures,
 	}
 	if hasInfo {
 		status.SystemInfo = &info
@@ -1219,6 +1632,7 @@ func (p *Poller) collectHost(id int, force bool) HostStatus {
 	if failures == 1 || failures == 2 || failures == 4 || failures%10 == 0 {
 		log.Printf("host %d collection failed (%d failures, retry in %s): %v", id, failures, backoff, err)
 	}
+	p.mu.Unlock()
 	return status
 }
 
@@ -1254,14 +1668,35 @@ func (p *Poller) status(id int) HostStatus {
 	return status
 }
 
+func (p *Poller) statusSnapshot(hostIDs []int) map[int]HostStatus {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	statuses := make(map[int]HostStatus, len(hostIDs))
+	for _, id := range hostIDs {
+		status, ok := p.statuses[id]
+		if !ok {
+			status = HostStatus{State: "pending"}
+		}
+		if storedInfo, exists := p.systemInfo[id]; exists {
+			info := storedInfo
+			status.SystemInfo = &info
+		}
+		statuses[id] = status
+	}
+	return statuses
+}
+
 func (p *Poller) removeHost(id int) {
 	p.mu.Lock()
+	p.revisions[id]++
+	if cancel := p.active[id]; cancel != nil {
+		cancel()
+	}
 	delete(p.statuses, id)
 	delete(p.systemInfo, id)
 	delete(p.infoTimes, id)
 	delete(p.failures, id)
-	delete(p.nextRetry, id)
-	delete(p.hostLocks, id)
+	delete(p.nextDue, id)
 	p.mu.Unlock()
 	p.metrics.remove(id)
 	p.collector.forget(id)
@@ -1269,28 +1704,70 @@ func (p *Poller) removeHost(id int) {
 
 func (p *Poller) hostUpdated(id int) {
 	p.mu.Lock()
+	p.revisions[id]++
+	if cancel := p.active[id]; cancel != nil {
+		cancel()
+	}
 	delete(p.systemInfo, id)
 	delete(p.infoTimes, id)
 	delete(p.failures, id)
-	delete(p.nextRetry, id)
+	delete(p.nextDue, id)
 	p.statuses[id] = HostStatus{State: "pending"}
 	p.mu.Unlock()
 	p.collector.forget(id)
+	p.wakeNow()
+}
+
+func (p *Poller) rescheduleAll() {
+	p.mu.Lock()
+	for id := range p.nextDue {
+		p.nextDue[id] = time.Time{}
+	}
+	p.mu.Unlock()
+	p.wakeNow()
+}
+
+func (p *Poller) requestRefresh(id int) HostStatus {
+	p.mu.Lock()
+	p.nextDue[id] = time.Time{}
+	status := p.statuses[id]
+	if !p.running[id] {
+		status.State = "pending"
+		status.Error = nil
+		p.statuses[id] = status
+	}
+	p.mu.Unlock()
+	p.wakeNow()
+	return status
 }
 
 func (p *Poller) reset() {
 	p.mu.Lock()
 	p.generation++
+	for id, cancel := range p.active {
+		p.revisions[id]++
+		cancel()
+	}
 	p.statuses = make(map[int]HostStatus)
 	p.systemInfo = make(map[int]SystemInfo)
 	p.infoTimes = make(map[int]time.Time)
 	p.failures = make(map[int]int)
-	p.nextRetry = make(map[int]time.Time)
-	p.hostLocks = make(map[int]*sync.Mutex)
+	p.nextDue = make(map[int]time.Time)
 	p.mu.Unlock()
 	p.metrics.reset()
 	p.collector.reset()
 	p.wakeNow()
+}
+
+func (p *Poller) stats() (running int, queued int, workers int, uptime time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, active := range p.running {
+		if active {
+			running++
+		}
+	}
+	return running, len(p.queue), p.workers, time.Since(p.startedAt)
 }
 
 func stringPointer(value string) *string { return &value }
@@ -1300,20 +1777,24 @@ type App struct {
 	poller *Poller
 }
 
+type DashboardHost struct {
+	PublicHost
+	Status HostStatus `json:"status"`
+}
+
 func (a *App) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", a.index)
 	mux.HandleFunc("GET /static/style.css", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-		w.Write([]byte(styleCSS))
+		serveAsset(w, r, "text/css; charset=utf-8", styleCSS, styleCSSGzip, "public, max-age=0, must-revalidate")
 	})
 	mux.HandleFunc("GET /static/app.js", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-		w.Write([]byte(appJS))
+		serveAsset(w, r, "application/javascript; charset=utf-8", appJS, appJSGzip, "public, max-age=0, must-revalidate")
 	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 	})
+	mux.HandleFunc("GET /api/status", a.runtimeStatus)
 	mux.HandleFunc("GET /api/hosts", a.listHosts)
 	mux.HandleFunc("POST /api/hosts", a.createHost)
 	mux.HandleFunc("PATCH /api/hosts/{id}", a.updateHost)
@@ -1327,7 +1808,8 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("GET /api/config", a.exportConfig)
 	mux.HandleFunc("PUT /api/config", a.importConfig)
 	mux.HandleFunc("GET /api/dashboard", a.dashboard)
-	return requestLogger(mux)
+	mux.HandleFunc("GET /api/snapshot", a.snapshot)
+	return requestLogger(gzipAPIResponses(mux))
 }
 
 func (a *App) index(w http.ResponseWriter, r *http.Request) {
@@ -1335,8 +1817,28 @@ func (a *App) index(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(indexHTML))
+	serveAsset(w, r, "text/html; charset=utf-8", indexHTML, indexHTMLGzip, "no-cache")
+}
+
+func serveAsset(w http.ResponseWriter, r *http.Request, contentType string, content string, compressed []byte, cacheControl string) {
+	etag := `"` + version + `-` + strconv.Itoa(len(content)) + `"`
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", cacheControl)
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Vary", "Accept-Encoding")
+	acceptsGzip := strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+	if acceptsGzip {
+		w.Header().Set("Content-Encoding", "gzip")
+	}
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if acceptsGzip {
+		_, _ = w.Write(compressed)
+		return
+	}
+	_, _ = io.WriteString(w, content)
 }
 
 func (a *App) listHosts(w http.ResponseWriter, r *http.Request) {
@@ -1345,9 +1847,22 @@ func (a *App) listHosts(w http.ResponseWriter, r *http.Request) {
 }
 
 func decodeJSON(r *http.Request, target any) error {
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxJSONBodyBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(raw) > maxJSONBodyBytes {
+		return errors.New("请求内容超过 1 MiB 限制")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(target)
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("请求只能包含一个 JSON 对象")
+	}
+	return nil
 }
 
 func (a *App) createHost(w http.ResponseWriter, r *http.Request) {
@@ -1361,7 +1876,7 @@ func (a *App) createHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
-	go a.poller.collectHost(created.ID, true)
+	a.poller.wakeNow()
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -1390,7 +1905,6 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.poller.hostUpdated(id)
-	go a.poller.collectHost(id, true)
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -1438,27 +1952,35 @@ func (a *App) refreshHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("主机不存在"))
 		return
 	}
-	writeJSON(w, http.StatusOK, a.poller.collectHost(id, true))
+	writeJSON(w, http.StatusAccepted, a.poller.requestRefresh(id))
 }
 
-func parseMetricQuery(r *http.Request) (*float64, int, error) {
-	var since *float64
+func parseMetricQuery(r *http.Request) (*float64, *uint64, int, error) {
+	var sinceTimestamp *float64
 	if raw := r.URL.Query().Get("since"); raw != "" {
 		value, err := strconv.ParseFloat(raw, 64)
 		if err != nil || value < 0 {
-			return nil, 0, errors.New("since 参数无效")
+			return nil, nil, 0, errors.New("since 参数无效")
 		}
-		since = &value
+		sinceTimestamp = &value
+	}
+	var sinceSequence *uint64
+	if raw := r.URL.Query().Get("since_seq"); raw != "" {
+		value, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return nil, nil, 0, errors.New("since_seq 参数无效")
+		}
+		sinceSequence = &value
 	}
 	limit := defaultChartPoints
 	if raw := r.URL.Query().Get("max_points"); raw != "" {
 		value, err := strconv.Atoi(raw)
 		if err != nil || value < 2 || value > maxChartPoints {
-			return nil, 0, errors.New("max_points 参数无效")
+			return nil, nil, 0, errors.New("max_points 参数无效")
 		}
 		limit = value
 	}
-	return since, limit, nil
+	return sinceTimestamp, sinceSequence, limit, nil
 }
 
 func (a *App) hostMetrics(w http.ResponseWriter, r *http.Request) {
@@ -1471,29 +1993,35 @@ func (a *App) hostMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("主机不存在"))
 		return
 	}
-	since, limit, err := parseMetricQuery(r)
+	sinceTimestamp, sinceSequence, limit, err := parseMetricQuery(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	settings := a.store.settings()
-	writeJSON(w, http.StatusOK, a.poller.metrics.get(id, settings.HistoryMinutes, since, limit))
+	metrics, sequence := a.poller.metrics.getSnapshot(id, settings.HistoryMinutes, sinceTimestamp, sinceSequence, limit)
+	w.Header().Set("X-HostWatch-Sequence", strconv.FormatUint(sequence, 10))
+	writeJSON(w, http.StatusOK, metrics)
 }
 
 func (a *App) allMetrics(w http.ResponseWriter, r *http.Request) {
-	since, limit, err := parseMetricQuery(r)
+	sinceTimestamp, sinceSequence, limit, err := parseMetricQuery(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	privateHosts, _ := a.store.listHosts(true)
 	settings := a.store.settings()
-	metrics := make(map[string][]Metric, len(privateHosts))
+	hostIDs := make([]int, 0, len(privateHosts))
 	for _, host := range privateHosts {
-		metrics[strconv.Itoa(host.ID)] = a.poller.metrics.get(host.ID, settings.HistoryMinutes, since, limit)
+		hostIDs = append(hostIDs, host.ID)
 	}
+	metrics, nextSequence := a.poller.metrics.getAll(
+		hostIDs, settings.HistoryMinutes, sinceTimestamp, sinceSequence, limit,
+	)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"metrics": metrics, "server_time": float64(time.Now().UnixNano()) / 1e9,
+		"metrics": metrics, "next_sequence": nextSequence,
+		"server_time": float64(time.Now().UnixNano()) / 1e9,
 	})
 }
 
@@ -1512,7 +2040,7 @@ func (a *App) updateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.poller.metrics.pruneAll(settings.HistoryMinutes)
-	a.poller.wakeNow()
+	a.poller.rescheduleAll()
 	writeJSON(w, http.StatusOK, settings)
 }
 
@@ -1553,13 +2081,14 @@ func (a *App) importConfig(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) dashboard(w http.ResponseWriter, r *http.Request) {
 	_, hosts := a.store.listHosts(false)
-	items := make([]map[string]any, 0, len(hosts))
+	hostIDs := make([]int, len(hosts))
+	for index, host := range hosts {
+		hostIDs[index] = host.ID
+	}
+	statuses := a.poller.statusSnapshot(hostIDs)
+	items := make([]DashboardHost, 0, len(hosts))
 	for _, host := range hosts {
-		raw, _ := json.Marshal(host)
-		var item map[string]any
-		json.Unmarshal(raw, &item)
-		item["status"] = a.poller.status(host.ID)
-		items = append(items, item)
+		items = append(items, DashboardHost{PublicHost: host, Status: statuses[host.ID]})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"settings": a.store.settings(), "hosts": items,
@@ -1567,8 +2096,71 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *App) snapshot(w http.ResponseWriter, r *http.Request) {
+	sinceTimestamp, sinceSequence, limit, err := parseMetricQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	_, hosts := a.store.listHosts(false)
+	items := make([]DashboardHost, 0, len(hosts))
+	hostIDs := make([]int, 0, len(hosts))
+	for _, host := range hosts {
+		hostIDs = append(hostIDs, host.ID)
+	}
+	statuses := a.poller.statusSnapshot(hostIDs)
+	for _, host := range hosts {
+		items = append(items, DashboardHost{PublicHost: host, Status: statuses[host.ID]})
+	}
+	settings := a.store.settings()
+	metrics, nextSequence := a.poller.metrics.getAll(
+		hostIDs, settings.HistoryMinutes, sinceTimestamp, sinceSequence, limit,
+	)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"settings": settings, "hosts": items, "metrics": metrics,
+		"next_sequence": nextSequence,
+		"server_time":   float64(time.Now().UnixNano()) / 1e9,
+	})
+}
+
+func (a *App) runtimeStatus(w http.ResponseWriter, r *http.Request) {
+	_, hosts := a.store.listHosts(false)
+	hostIDs := make([]int, len(hosts))
+	for index, host := range hosts {
+		hostIDs[index] = host.ID
+	}
+	statuses := a.poller.statusSnapshot(hostIDs)
+	online, failed := 0, 0
+	for _, host := range hosts {
+		switch statuses[host.ID].State {
+		case "online":
+			online++
+		case "error":
+			failed++
+		}
+	}
+	points, metricHosts, sequence := a.poller.metrics.stats()
+	running, queued, workers, uptime := a.poller.stats()
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"version": version, "uptime_seconds": int64(uptime.Seconds()),
+		"hosts": map[string]int{"total": len(hosts), "online": online, "error": failed},
+		"collector": map[string]int{
+			"workers": workers, "scheduled": running, "queued": queued,
+			"ssh_connections": a.poller.collector.connectionCount(),
+		},
+		"metrics": map[string]any{"points": points, "hosts": metricHosts, "sequence": sequence},
+		"runtime": map[string]any{
+			"goroutines": runtime.NumGoroutine(), "alloc_bytes": memory.Alloc,
+			"sys_bytes": memory.Sys,
+		},
+	})
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		log.Printf("write response: %v", err)
@@ -1579,17 +2171,70 @@ func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"detail": err.Error()})
 }
 
+var gzipWriterPool = sync.Pool{New: func() any {
+	writer, _ := gzip.NewWriterLevel(io.Discard, gzip.BestSpeed)
+	return writer
+}}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	writer      *gzip.Writer
+	wroteHeader bool
+}
+
+func (writer *gzipResponseWriter) WriteHeader(status int) {
+	if writer.wroteHeader {
+		return
+	}
+	writer.wroteHeader = true
+	writer.Header().Set("Content-Encoding", "gzip")
+	writer.Header().Add("Vary", "Accept-Encoding")
+	writer.Header().Del("Content-Length")
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *gzipResponseWriter) Write(content []byte) (int, error) {
+	if !writer.wroteHeader {
+		writer.WriteHeader(http.StatusOK)
+	}
+	return writer.writer.Write(content)
+}
+
+func gzipAPIResponses(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		compressible := r.Method == http.MethodGet && (r.URL.Path == "/api/snapshot" ||
+			r.URL.Path == "/api/metrics" || r.URL.Path == "/api/dashboard" ||
+			r.URL.Path == "/api/config")
+		if !compressible || !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		gzipWriter := gzipWriterPool.Get().(*gzip.Writer)
+		gzipWriter.Reset(w)
+		wrapped := &gzipResponseWriter{ResponseWriter: w, writer: gzipWriter}
+		next.ServeHTTP(wrapped, r)
+		if err := gzipWriter.Close(); err != nil {
+			log.Printf("compress response: %v", err)
+		}
+		gzipWriter.Reset(io.Discard)
+		gzipWriterPool.Put(gzipWriter)
+	})
+}
+
 func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
 		next.ServeHTTP(w, r)
-		if !strings.HasPrefix(r.URL.Path, "/api/dashboard") && !strings.HasPrefix(r.URL.Path, "/api/metrics") {
+		quietPath := r.URL.Path == "/health" || r.URL.Path == "/api/status" ||
+			r.URL.Path == "/api/dashboard" || r.URL.Path == "/api/metrics" ||
+			r.URL.Path == "/api/snapshot"
+		if !quietPath {
 			log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(started).Round(time.Millisecond))
 		}
 	})
 }
 
-func mustDecodeAsset(encoded string) string {
+func mustDecodeAsset(encoded string) (string, []byte) {
 	compressed, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		panic(err)
@@ -1603,7 +2248,7 @@ func mustDecodeAsset(encoded string) string {
 	if err != nil {
 		panic(err)
 	}
-	return string(raw)
+	return string(raw), compressed
 }
 
 func runSelfTest() error {
@@ -1678,6 +2323,9 @@ func listenAddress() string {
 func main() {
 	selfTest := flag.Bool("self-test", false, "run built-in checks and exit")
 	versionFlag := flag.Bool("version", false, "print version and exit")
+	checkConfig := flag.Bool("check-config", false, "validate config and exit")
+	listenFlag := flag.String("listen", "", "HTTP listen address, for example :8000 or [::1]:8000")
+	dataDirFlag := flag.String("data-dir", "", "configuration directory (overrides HOSTWATCH_DATA_DIR)")
 	flag.Parse()
 	if *versionFlag {
 		fmt.Println(version)
@@ -1691,20 +2339,36 @@ func main() {
 		return
 	}
 
-	dataDir := envOrDefault("HOSTWATCH_DATA_DIR", "data")
+	dataDir := *dataDirFlag
+	if dataDir == "" {
+		dataDir = envOrDefault("HOSTWATCH_DATA_DIR", "data")
+	}
 	store, err := newStore(filepath.Join(dataDir, "config.json"))
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *checkConfig {
+		_, hosts := store.listHosts(false)
+		fmt.Printf("HostWatch config OK (%d hosts)\n", len(hosts))
+		return
 	}
 	poller := newPoller(store)
 	poller.start()
 	defer poller.close()
 
 	address := listenAddress()
+	if *listenFlag != "" {
+		address = *listenFlag
+	}
 	server := &http.Server{
 		Addr: address, Handler: (&App{store: store, poller: poller}).routes(),
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
+	serverErrors := make(chan error, 1)
 	go func() {
 		displayAddress := address
 		if strings.HasPrefix(displayAddress, ":") {
@@ -1712,16 +2376,27 @@ func main() {
 		}
 		log.Printf("HostWatch %s listening on http://%s", version, displayAddress)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal(err)
+			serverErrors <- err
 		}
 	}()
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-	<-signals
+	var serveErr error
+	select {
+	case <-signals:
+		log.Printf("收到退出信号，正在停止服务")
+	case err := <-serverErrors:
+		serveErr = err
+	}
+	signal.Stop(signals)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		log.Printf("shutdown: %v", err)
+	}
+	poller.close()
+	if serveErr != nil {
+		log.Fatalf("HTTP 服务异常退出: %v", serveErr)
 	}
 }
