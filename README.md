@@ -12,9 +12,13 @@ HostWatch 是一个轻量的多主机 Linux 资源监控网页服务。程序通
 - hostname、CPU 核数、内存总量和根分区总容量
 - JSON 明文配置，不使用数据库
 - JSON 配置自动备份、版本迁移、损坏恢复和网页导入导出
-- 指标仅保存在内存环形缓冲区中，支持时间窗口和数量硬上限
-- 增量指标接口和图表降采样
-- 离线主机指数退避，手动刷新可立即重试
+- 配置采用临时文件、`fsync` 和原子替换，异常退出后可自动恢复
+- 指标仅保存在内存环形缓冲区中，支持时间窗口、数量硬上限和历史压缩保留
+- 无丢点序列游标、单次快照接口、增量传输和图表降采样
+- 固定大小采集队列，慢主机不会阻塞健康主机的刷新周期
+- SSH 全流程超时、连接复用、空闲回收和任务取消
+- 离线主机指数退避，手动刷新异步入队
+- 页面请求失败指数退避，后台标签页自动暂停刷新
 - 暗色、亮色和墨水屏亮色主题
 - 局域网访问
 
@@ -28,6 +32,13 @@ go run .
 ```
 
 浏览器访问 <http://localhost:8000>。程序默认监听 `:8000`，即全部可用 IPv4 和 IPv6 接口；局域网设备可以使用部署机器的 IPv4 地址或 IPv6 地址访问。
+
+也可以完全使用命令行参数启动：
+
+```bash
+./hostwatch -listen :8000 -data-dir /var/lib/hostwatch
+./hostwatch -check-config -data-dir /var/lib/hostwatch
+```
 
 运行内置检查：
 
@@ -52,6 +63,41 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o hostwatch .
 | `HOSTWATCH_HOST` | 空（全部接口） | HTTP 监听地址，支持 IPv4 或 IPv6 |
 | `HOSTWATCH_PORT` | `8000` | HTTP 监听端口 |
 | `HOSTWATCH_DATA_DIR` | `./data` | `config.json` 所在目录 |
+| `HOSTWATCH_MAX_CONCURRENT` | `8` | 同时进行的 SSH 采集数量，可设置为 `1` 到 `64` |
+| `HOSTWATCH_MAX_IDLE_SSH` | `128` | 最多保留的空闲 SSH 连接数，可设置为 `0` 到 `512`；`0` 表示每次采集后立即断开 |
+
+命令行的 `-listen` 和 `-data-dir` 优先于对应环境变量。程序最多接受 512 台主机；指标总量和单主机指标量都有硬上限，达到总量上限时会压缩较密集的历史数据，而不是直接丢失整段时间范围。
+
+## systemd 部署
+
+只需要 Release 中的一个二进制文件：
+
+```bash
+sudo install -m 0755 hostwatch /usr/local/bin/hostwatch
+sudo tee /etc/systemd/system/hostwatch.service >/dev/null <<'EOF'
+[Unit]
+Description=HostWatch Linux fleet monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=hostwatch
+Environment=HOSTWATCH_MAX_CONCURRENT=8
+Environment=HOSTWATCH_MAX_IDLE_SSH=128
+ExecStart=/usr/local/bin/hostwatch -data-dir /var/lib/hostwatch
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now hostwatch
+```
+
+升级时替换二进制并执行 `sudo systemctl restart hostwatch`。默认监听全部 IPv4/IPv6 地址；状态检查接口为 `/health`，详细运行状态接口为 `/api/status`。
 
 ## GitHub Actions 构建与发布
 
@@ -74,14 +120,14 @@ gh run download <run-id> --dir dist
 推送 `v*` 版本标签会自动创建 GitHub Release。Release 包含 Linux、macOS、Windows 压缩包以及 `checksums.txt`：
 
 ```bash
-git tag -a v0.3.0 -m "HostWatch v0.3.0"
-git push origin v0.3.0
+git tag -a v0.4.0 -m "HostWatch v0.4.0"
+git push origin v0.4.0
 gh run watch --exit-status
-gh release view v0.3.0
-gh release download v0.3.0 --dir dist/release
+gh release view v0.4.0
+gh release download v0.4.0 --dir dist/release
 ```
 
-标签中的版本号会在编译时写入程序，因此 `v0.3.0` Release 中的二进制执行 `hostwatch -version` 会输出 `0.3.0`。
+标签中的版本号会在编译时写入程序，因此 `v0.4.0` Release 中的二进制执行 `hostwatch -version` 会输出 `0.4.0`。
 
 ## 目标主机要求
 
